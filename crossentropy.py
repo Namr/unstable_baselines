@@ -80,6 +80,7 @@ class CrossEntropyAgent():
         return torch.Tensor(train_observations), torch.Tensor(train_actions), value_threshold, mean_value
 
     def train(self, learning_rate, desired_mean, batch_size=16, percentile=70):
+        best_mean_value = -10000000000
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
         for n, batch in enumerate(self.iterate_batch(batch_size)):
@@ -96,6 +97,9 @@ class CrossEntropyAgent():
             optimizer.zero_grad()
             
             print(f"Batch: {n} | Loss: {loss} | mean_value: {mean_value}")
+            if mean_value >= best_mean_value:
+                best_mean_value = mean_value
+                torch.save(self.model.state_dict(), f"./models/CrossEntropy_{self.env.unwrapped.spec.id}_best.pth")
 
             if mean_value >= desired_mean:
                 print("Finished Training")

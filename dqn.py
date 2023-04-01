@@ -4,7 +4,6 @@ import torch
 import torch.nn as nn
 import numpy as np
 import collections
-import wrappers
 import math
 
 
@@ -13,15 +12,18 @@ class NoisyLinear(nn.Linear):
                  sigma_init=0.017, bias=True):
         super(NoisyLinear, self).__init__(
             in_features, out_features, bias=bias)
+
         w = torch.full((out_features, in_features), sigma_init)
         self.sigma_weight = nn.Parameter(w)
         z = torch.zeros(out_features, in_features)
         self.register_buffer("epsilon_weight", z)
+
         if bias:
             w = torch.full((out_features,), sigma_init)
             self.sigma_bias = nn.Parameter(w)
             z = torch.zeros(out_features)
             self.register_buffer("epsilon_bias", z)
+
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -32,12 +34,15 @@ class NoisyLinear(nn.Linear):
     def forward(self, input):
         self.epsilon_weight.normal_()
         bias = self.bias
+
         if bias is not None:
             self.epsilon_bias.normal_()
             bias = bias + self.sigma_bias * \
                 self.epsilon_bias.data
+
         v = self.sigma_weight * self.epsilon_weight.data + \
             self.weight
+
         return nn.functional.linear(input, v, bias)
 
 
@@ -139,10 +144,11 @@ class ReplayBuffer:
 
 
 class DQNAgent:
-    def __init__(self, env: gym.Env, model: nn.Module, target_model: nn.Module, memory_size=10000, batch_size=32,
+    def __init__(self, env: gym.Env, model: nn.Module, target_model: nn.Module, memory_size=100000, batch_size=32,
                  gamma=1.0, epsilon_start=1.0, epsilon_end=0.01, epsilon_duration=100000,
-                 replay_start_size=10000, target_sync_time=10000):
-
+                 replay_start_size=10000, target_sync_time=1000, writer=None):
+        
+        self.writer = writer
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         # self.device = 'cpu'
         print(f"Using device: {self.device} for DQNAgent Training")
@@ -162,7 +168,7 @@ class DQNAgent:
         self.env = env
         self.memory = ReplayBuffer(memory_size)
         self.reset()
-    
+         
     def reset(self):
         self.state, _ = self.env.reset()
         self.value = 0.0
@@ -248,7 +254,7 @@ class DQNAgent:
                 if best_mean_reward < mean_reward:
                     best_mean_reward = mean_reward
                     torch.save(self.model.state_dict(), f"./models/DQN_{self.env.unwrapped.spec.id}_best.pth")
-                    if best_mean_reward == target_reward:
+                    if best_mean_reward > target_reward:
                         print("solved!")
                         break
                 
@@ -258,6 +264,10 @@ class DQNAgent:
             if count % self.target_sync_time == 0:
                 self.target_model.load_state_dict(self.model.state_dict())
                 print(f"steps: {count} | episode: {len(final_rewards)} | average reward: {mean_reward} | epsilon: {epsilon} | framerate: {frame_rate}")
+
+                # write mean reward to tensorboard
+                if self.writer is not None:
+                    self.writer.add_scalar('DQN Mean Reward', mean_reward, count)
 
             # training
             loss = self.loss_from_memory()
@@ -269,9 +279,9 @@ class DQNAgent:
 # Has Double Q learning + n-step sampling (excludes categorical DQN which was in the paper)
 # For true Rainbowness, you need to make your network have noisy layers & dueling (see NoisyDuelingImageModel for an example)
 class RainbowAgent:
-    def __init__(self, env: gym.Env, model: nn.Module, target_model: nn.Module, memory_size=10000, batch_size=32,
-                 gamma=1.0, replay_start_size=10000, target_sync_time=10000, n_steps=2):
-
+    def __init__(self, env: gym.Env, model: nn.Module, target_model: nn.Module, memory_size=100000, batch_size=32,
+                 gamma=1.0, replay_start_size=10000, target_sync_time=1000, n_steps=3, writer=None):
+        self.writer = writer
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         # self.device = 'cpu'
         print(f"Using device: {self.device} for RainbowAgent Training")
@@ -282,6 +292,7 @@ class RainbowAgent:
         self.replay_start_size = replay_start_size
         self.target_sync_time = target_sync_time
         self.n_steps = n_steps
+        self.history_queue = collections.deque(maxlen=self.n_steps)
 
         # models and state
         self.model = model.to(self.device)
@@ -306,50 +317,56 @@ class RainbowAgent:
         
         predicted_Q = self.model(states).gather(1, actions.unsqueeze(-1)).squeeze(-1)
         
-        # double Q learning
-        next_state_actions = self.model(states_prime).max(1)[1]
-        next_state_actions = next_state_actions.unsqueeze(-1)
+        with torch.no_grad():
+            # double Q learning
+            next_state_actions = self.model(states_prime).max(1)[1]
+            next_state_actions = next_state_actions.unsqueeze(-1)
 
-        # there is no target prediction in Q learning in the last step of an episode
-        # without this training will never converge
-        target_Q = self.target_model(states_prime).gather(1, next_state_actions).squeeze(-1)
-        target_Q[done_mask] = 0.0
-        target_Q = target_Q.detach()
+            # there is no target prediction in Q learning in the last step of an episode
+            # without this training will never converge
+            target_Q = self.target_model(states_prime).gather(1, next_state_actions).squeeze(-1)
+            target_Q[done_mask] = 0.0
+            target_Q = target_Q.detach()
 
-        expected_Q = (target_Q * (self.gamma**self.n_steps) + rewards).float()
+            expected_Q = (target_Q * (self.gamma**self.n_steps) + rewards).float()
 
         return nn.MSELoss()(predicted_Q, expected_Q)
-
+    
+    @torch.no_grad()
     def step(self):
         episode_value = None
-        n_step_value = 0.0
-        start_state = self.state
 
-        for n in range(self.n_steps):
-            s = torch.from_numpy(np.array([self.state], copy=False)).to(self.device)
-            q = self.model(s)
-            _, a = torch.max(q, dim=1)
-            a = int(a.item())
-            
-            # get s_prime, r from the env
-            s_prime, r, terminated, truncated, _ = self.env.step(a)
-            is_done = truncated or terminated
+        # determine action
+        s = torch.from_numpy(np.array([self.state], copy=False)).to(self.device)
+        q = self.model(s)
+        _, a = torch.max(q, dim=1)
+        a = int(a.item())
+        
+        # get s_prime, r from the env
+        s_prime, r, terminated, truncated, _ = self.env.step(a)
+        is_done = truncated or terminated
+        self.value += r
+        
+        s_prime = s_prime
+        
+        exp = [self.state, a, r, is_done, s_prime]
+        self.history_queue.append(exp)
+        
+        # bellman unroll
+        if len(self.history_queue) >= self.n_steps:
+            # remember this unrolled nsteps
+            rr = 0
+            for h in self.history_queue:
+                rr += h[2] * self.gamma
+            self.memory.append([self.history_queue[0][0], self.history_queue[0][1], rr, is_done, s_prime])
+        
+        # update state
+        self.state = s_prime
 
-            self.value += r * self.gamma
-            n_step_value += r * self.gamma
-
-            # remember this step if its the last one
-            if n == self.n_steps - 1 or is_done:
-                exp = [start_state, a, n_step_value, is_done, s_prime]
-                self.memory.append(exp)
-            
-            # update state
-            self.state = s_prime
-
-            if is_done:
-                episode_value = self.value
-                self.reset()
-                break
+        if is_done:
+            episode_value = self.value
+            self.reset()
+            self.history_queue.clear()
 
         # if we finished an episode, let's report how well we did
         return episode_value
@@ -378,7 +395,7 @@ class RainbowAgent:
                 if best_mean_reward < mean_reward:
                     best_mean_reward = mean_reward
                     torch.save(self.model.state_dict(), f"./models/Rainbow_{self.env.unwrapped.spec.id}_best.pth")
-                    if best_mean_reward == target_reward:
+                    if best_mean_reward > target_reward:
                         print("solved!")
                         break
                 
@@ -388,59 +405,13 @@ class RainbowAgent:
             if count % self.target_sync_time == 0:
                 self.target_model.load_state_dict(self.model.state_dict())
                 print(f"steps: {count} | episode: {len(final_rewards)} | average reward: {mean_reward} | framerate: {frame_rate}")
+                
+                # write mean reward to tensorboard
+                if self.writer is not None:
+                    self.writer.add_scalar('Rainbow Mean Reward', mean_reward, count)
 
             # training
             loss = self.loss_from_memory()
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
-                 
-
-if __name__ == "__main__":
-    env = gym.make('PongNoFrameskip-v4')
-    env = wrappers.MaxAndSkipEnv(env)
-    env = wrappers.FireResetEnv(env)
-    env = wrappers.ProcessFrame84(env)
-    env = wrappers.ImageToPyTorch(env)
-    env = wrappers.ScaledFloatFrame(env)
-    
-    obs, _ = env.reset()
-
-    model = NoisyDuelingImageModel()
-    target = NoisyDuelingImageModel()
-    agent = RainbowAgent(env, model, target,
-                         memory_size=10000, batch_size=32, gamma=0.99, target_sync_time=1000, n_steps=1)
-    
-    agent.train(1e-4, 19)
-    '''
-    model.load_state_dict(torch.load('./models/PongNoFrameskip-v4_best.pth'))
-    while True:
-        value = agent.step(0.0)
-        # env.render()
-        # time.sleep(0.03)
-
-        if value is not None:
-            break
-    
-    # agent.train(1e-4, 19)
-    '''
-'''
-if __name__ == "__main__":
-    env = gym.make('CartPole-v0')
-    model = CartpoleDQNModel()
-    target = CartpoleDQNModel()
-    agent = DQNAgent(env, model, target, epsilon_duration=400000, target_sync_time=100)
-    
-        
-    agent.train(0.01, 200)
-'''
-'''
-model.load_state_dict(torch.load('./models/CartPole-v0_best.pth'))
-while True:
-    value = agent.step(0.0)
-    env.render()
-    time.sleep(0.03)
-
-    if value is not None:
-        break
-'''
