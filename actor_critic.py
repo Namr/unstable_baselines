@@ -101,7 +101,7 @@ class CartpoleActorCriticModel(nn.Module):
 
 
 class A2CAgent():
-    def __init__(self, envs: List[gym.Env], model: nn.Module, gamma=0.99, batch_size=128,
+    def __init__(self, env: gym.Env, model: nn.Module, gamma=0.99, batch_size=128,
                  value_beta=0.5, entropy_beta=0.02, grad_limit=0.5, writer=None):
         self.writer = writer
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
