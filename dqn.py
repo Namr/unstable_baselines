@@ -6,6 +6,8 @@ import numpy as np
 import collections
 import math
 
+from experience import ReplayBuffer
+
 
 class NoisyLinear(nn.Linear):
     def __init__(self, in_features, out_features,
@@ -115,7 +117,6 @@ class NoisyDuelingImageModel(nn.Module):
         return int(np.prod(o.size()))
 
     def forward(self, x):
-        # x = x.float() / 255
         out = self.conv(x)
         out = out.view(x.size()[0], -1)
 
@@ -123,24 +124,6 @@ class NoisyDuelingImageModel(nn.Module):
         adv_out = self.fc_adv2(nn.functional.relu(self.fc_adv1(out)))
         val_out = self.fc_val2(nn.functional.relu(self.fc_val1(out)))
         return val_out + (adv_out - adv_out.mean(dim=1, keepdim=True))
-
-
-class ReplayBuffer:
-    def __init__(self, capacity):
-        self.buffer = collections.deque(maxlen=capacity)
-
-    def __len__(self):
-        return len(self.buffer)
-
-    def append(self, experience):
-        return self.buffer.append(experience)
-
-    def sample(self, sample_size):
-        idxs = np.random.choice(len(self.buffer), sample_size, replace=False)
-
-        states, actions, rewards, dones, next_states = zip(*[self.buffer[idx] for idx in idxs])
-
-        return np.array(states), np.array(actions), np.array(rewards), np.array(dones, dtype=np.uint8), np.array(next_states)
 
 
 class DQNAgent:

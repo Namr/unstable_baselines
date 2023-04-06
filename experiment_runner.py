@@ -4,6 +4,7 @@ import gym
 import dqn
 import policygrad
 import crossentropy
+import actor_critic
 import wrappers
 
 import argparse
@@ -49,12 +50,16 @@ if __name__ == "__main__":
     elif args.model == "cartpole-dqn":
         model = dqn.CartpoleDQNModel()
         target = dqn.CartpoleDQNModel()
+    elif args.model == "cartpole-a2c":
+        model = actor_critic.CartpoleActorCriticModel()
     elif args.model == "image":
         model = dqn.ImageModel()
         target = dqn.ImageModel()
     elif args.model == "noisy-dueling-image":
         model = dqn.NoisyDuelingImageModel()
         target = dqn.NoisyDuelingImageModel()
+    elif args.model == "image-a2c":
+        model = actor_critic.ImageActorCriticModel()
 
     # load algorithim
     agent = None
@@ -66,6 +71,10 @@ if __name__ == "__main__":
         agent = dqn.DQNAgent(env, model, target, epsilon_duration=10**5, target_sync_time=1000, gamma=0.99, writer=writer)
     elif args.agent == "rainbow":
         agent = dqn.RainbowAgent(env, model, target, target_sync_time=1000, gamma=0.99, n_steps=3, writer=writer)
+    elif args.agent == "a2c":
+        agent = actor_critic.A2CAgent(env, model, gamma=0.99, writer=writer)
+    elif args.agent == "ppo":
+        agent = actor_critic.PPOAgent(env, model, writer=writer)
 
     # train or run
     if args.load is not None:

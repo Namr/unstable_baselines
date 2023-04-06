@@ -23,7 +23,7 @@ class CartpoleREINFORCEModel(nn.Module):
 
 
 class REINFORCEAgent():
-    def __init__(self, env: gym.Env, model: nn.Module, gamma=1.0, batch_size=16, writer=None):
+    def __init__(self, env: gym.Env, model: nn.Module, gamma=1.0, batch_size=32, writer=None):
         self.writer = writer
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"Using device: {self.device} for REINFORCEAgent Training")
