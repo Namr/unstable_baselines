@@ -37,6 +37,8 @@ if __name__ == "__main__":
         env = wrappers.ScaledFloatFrame(env)
     elif args.env == "space-invaders":
         pass
+    elif args.env == "hopper":
+        env = gym.make('Hopper-v4', render_mode=mode)
     elif args.env == "cartpole":
         env = gym.make('CartPole-v0', render_mode=mode)
     
@@ -60,6 +62,8 @@ if __name__ == "__main__":
         target = dqn.NoisyDuelingImageModel()
     elif args.model == "image-a2c":
         model = actor_critic.ImageActorCriticModel()
+    elif args.model == "mujoco-a2c":
+        model = actor_critic.MujoCoActorCriticModel(env.observation_space.shape[0], env.action_space.shape[0], 256)
 
     # load algorithim
     agent = None
@@ -74,7 +78,7 @@ if __name__ == "__main__":
     elif args.agent == "a2c":
         agent = actor_critic.A2CAgent(env, model, gamma=0.99, writer=writer)
     elif args.agent == "ppo":
-        agent = actor_critic.PPOAgent(env, model, writer=writer)
+        agent = actor_critic.PPOAgent(env, model, writer=writer, batch_size=512)
 
     # train or run
     if args.load is not None:
@@ -83,9 +87,6 @@ if __name__ == "__main__":
             value = agent.step(0.0)
             env.render()
             time.sleep(0.03)
-
-            if value is not None:
-                break
     else:
         print(f"Training until we reach mean reward of {args.target_reward} with a learning rate of {args.learning_rate}")
         agent.train(args.learning_rate, args.target_reward)

@@ -5,6 +5,7 @@ import collections
 from typing import Optional
 import wrappers
 
+
 class ReplayBuffer:
     def __init__(self, capacity):
         self.buffer = collections.deque(maxlen=capacity)

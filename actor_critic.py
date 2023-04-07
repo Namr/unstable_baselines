@@ -100,6 +100,46 @@ class CartpoleActorCriticModel(nn.Module):
         return probs.log_prob(actions).diag(), probs.entropy(), value
 
 
+class MujoCoActorCriticModel(nn.Module):
+    def __init__(self, n_inputs, n_outputs, hidden_size):
+        super(MujoCoActorCriticModel, self).__init__()
+        
+        # define layers
+        self.fc1 = nn.Linear(n_inputs, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+
+        self.pfc2 = nn.Linear(hidden_size, n_outputs)
+        self.vfc2 = nn.Linear(hidden_size, 1)
+        self.logstd = nn.Parameter(torch.zeros(1, n_outputs))
+
+    def forward(self, x):
+        core = nn.functional.relu(self.fc2(nn.functional.relu(self.fc1(x))))
+
+        policy = self.pfc2(core)
+        std = torch.exp(self.logstd)
+        probs = torch.distributions.Normal(policy, std)
+        action = probs.sample()
+        value = self.vfc2(core)
+
+        return action, probs.log_prob(action).sum(), probs.entropy(), value
+
+    def evaluate_value(self, x, actions):
+        # flatten and do fully connected pass
+        core = nn.functional.relu(self.fc2(nn.functional.relu(self.fc1(x))))
+
+        policies = self.pfc2(core)
+        std = torch.exp(self.logstd)
+        
+        log_probs = torch.zeros(len(policies))
+        for i in range(len(policies)):
+            probs = torch.distributions.Normal(policies[i], std)
+            log_probs[i] = probs.log_prob(actions[i]).sum()
+
+        value = self.vfc2(core)
+
+        return log_probs, probs.entropy(), value
+
+
 class A2CAgent():
     def __init__(self, env: gym.Env, model: nn.Module, gamma=0.99, batch_size=128,
                  value_beta=0.5, entropy_beta=0.02, grad_limit=0.5, writer=None):
@@ -129,7 +169,7 @@ class A2CAgent():
         self.value = 0.0
     
     @torch.no_grad()
-    def step(self):
+    def step(self, epsilon=0.0):
         # run observation through network
         obs_tensor = torch.from_numpy(np.array([self.state])).to(self.device)
         action, log_prob, entropy, predicted_value = self.model(obs_tensor)
@@ -208,8 +248,8 @@ class A2CAgent():
 
 class PPOAgent():
     def __init__(self, env: gym.Env, model: nn.Module,
-                 gamma=0.99, td_lambda=0.95, trajectory_length=5000, batch_size=256,
-                 value_beta=0.5, entropy_beta=0.02, grad_limit=0.5, epsilon=0.1, writer=None):
+                 gamma=0.99, td_lambda=0.95, trajectory_length=2048, batch_size=64,
+                 value_beta=0.5, entropy_beta=0.02, grad_limit=0.5, epsilon=0.2, writer=None):
         self.writer = writer
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"Using device: {self.device} for PPOAgent Training")
@@ -240,13 +280,14 @@ class PPOAgent():
         self.value = 0.0
     
     @torch.no_grad()
-    def step(self):
+    def step(self, epsilon=0.0):
         # run observation through network
-        obs_tensor = torch.from_numpy(np.array([self.state])).to(self.device)
+        obs_tensor = torch.from_numpy(np.array([self.state])).float().to(self.device)
         action, log_prob, entropy, predicted_value = self.model(obs_tensor)
 
         # take action according to policy network
-        next_observation, reward, terminated, truncated, _ = self.env.step(action.cpu().numpy().item())
+        action = action.reshape(self.env.action_space.shape)
+        next_observation, reward, terminated, truncated, _ = self.env.step(action.cpu().numpy())
         is_done = terminated or truncated
         
         # remember what happened for training
@@ -275,21 +316,21 @@ class PPOAgent():
             # since batch size is not specified, this loop only happens once
             for old_observations, old_actions, old_values, old_log_probs, advantages, returns in self.memory.get(self.batch_size):
                 # prep data
-                old_actions = torch.Tensor(old_actions).to(self.device).reshape(-1, 1)
+                old_actions = torch.Tensor(old_actions).to(self.device).reshape(-1, self.env.action_space.shape[0])
                 advantages = (advantages - advantages.mean() / (advantages.std() + 1e-8))
                 advantages = torch.from_numpy(advantages).to(self.device)
                 returns = torch.from_numpy(returns).to(self.device)
                 old_log_probs = torch.from_numpy(old_log_probs).to(self.device)
                 
                 # make predicitions
-                obs_tensor = torch.from_numpy(old_observations.reshape(-1, *self.env.observation_space.shape)).to(self.device)
+                obs_tensor = torch.from_numpy(old_observations.reshape(-1, *self.env.observation_space.shape)).float().to(self.device)
                 log_probs, entropy, predicted_values = self.model.evaluate_value(obs_tensor, old_actions)
                 predicted_values = predicted_values.flatten()
                 
                 # compute loss
 
                 # clip policy ratio loss
-                ratio = torch.exp(log_probs - old_log_probs)
+                ratio = torch.exp(log_probs.to(self.device) - old_log_probs)
                 unclipped_policy_loss = advantages * ratio
                 clipped_policy_loss = advantages * torch.clamp(ratio, 1 - self.epsilon, 1 + self.epsilon)
                 policy_loss = -torch.min(unclipped_policy_loss, clipped_policy_loss).mean()
@@ -323,4 +364,36 @@ class PPOAgent():
                         print("Solved!")
                         return
             n += 1
+
+# simple unit test
+if __name__ == "__main__":
+    env = gym.make('Hopper-v4')
+
+    state, _ = env.reset()
+    model = MujoCoActorCriticModel(env.observation_space.shape[0], env.action_space.shape[0], 256)
+    buffer = RolloutBuffer(4, env.observation_space, env.action_space, 1, 1.0, 1.0)
+
+    observations = torch.zeros((2, *env.observation_space.shape))
+    actions = torch.zeros((2, *env.action_space.shape))
+
+    # act
+    obs_tensor = torch.from_numpy(np.array([state])).float()
+    action, log_prob, entropy, predicted_value = model(obs_tensor)
+    actions[0] = action
+    actionu = action.reshape(env.action_space.shape)
+    next_observation, reward, terminated, truncated, _ = env.step(actionu.cpu().numpy())
+    print(entropy)
+    observations[0] = obs_tensor
+    state = next_observation
+    
+    # act
+    obs_tensor2 = torch.from_numpy(np.array([state])).float()
+    action2, log_prob, entropy, predicted_value = model(obs_tensor2)
+    print(entropy)
+    observations[1] = obs_tensor2
+    actions[1] = action2
+
+    log_probs, entropy, predicted_values = model.evaluate_value(observations, actions)
+    print(entropy)
+
 
