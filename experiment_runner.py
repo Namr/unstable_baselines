@@ -54,6 +54,8 @@ if __name__ == "__main__":
         target = dqn.CartpoleDQNModel()
     elif args.model == "cartpole-a2c":
         model = actor_critic.CartpoleActorCriticModel()
+    elif args.model == "cartpole-sac":
+        model = actor_critic.CartpoleSoftActorCriticModel()
     elif args.model == "image":
         model = dqn.ImageModel()
         target = dqn.ImageModel()
@@ -64,6 +66,12 @@ if __name__ == "__main__":
         model = actor_critic.ImageActorCriticModel()
     elif args.model == "mujoco-a2c":
         model = actor_critic.MujoCoActorCriticModel(env.observation_space.shape[0], env.action_space.shape[0], 256)
+    elif args.model == "mujoco-sac":
+        critic1 = actor_critic.MujoCoCriticModel(env.observation_space.shape[0] + env.action_space.shape[0], 256)
+        critic2 = actor_critic.MujoCoCriticModel(env.observation_space.shape[0] + env.action_space.shape[0], 256)
+        critic1_target = actor_critic.MujoCoCriticModel(env.observation_space.shape[0] + env.action_space.shape[0], 256)
+        critic2_target = actor_critic.MujoCoCriticModel(env.observation_space.shape[0] + env.action_space.shape[0], 256)
+        actor = actor_critic.MujoCoActorModel(env.observation_space.shape[0], env.action_space.shape[0], 256)
 
     # load algorithim
     agent = None
@@ -79,6 +87,8 @@ if __name__ == "__main__":
         agent = actor_critic.A2CAgent(env, model, gamma=0.99, writer=writer)
     elif args.agent == "ppo":
         agent = actor_critic.PPOAgent(env, model, writer=writer, batch_size=512)
+    elif args.agent == "sac":
+        agent = actor_critic.SACAgent(env, actor, critic1, critic2, critic1_target, critic2_target, writer=writer)
 
     # train or run
     if args.load is not None:

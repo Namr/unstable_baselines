@@ -88,7 +88,8 @@ class RolloutBuffer:
 
     def _get_samples(self, batch_indices: np.ndarray):
         return self.observations[batch_indices], self.actions[batch_indices], self.values[batch_indices].flatten(),\
-            self.log_probs[batch_indices].flatten(), self.advantages[batch_indices].flatten(), self.returns[batch_indices].flatten()
+            self.log_probs[batch_indices].flatten(), self.advantages[batch_indices].flatten(),\
+            self.rewards[batch_indices].flatten(), self.returns[batch_indices].flatten()
 
     def get(self, batch_size: Optional[int] = None):
         if not self.full:
