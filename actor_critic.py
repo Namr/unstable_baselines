@@ -630,9 +630,7 @@ class SACAgent():
             # logging
             mean_value = sum(self.final_values) / len(self.final_values) if len(self.final_values) != 0 else 0
             if mean_value != 0 and n % 1000 == 0:
-                print(f"Step: {n} | Loss: {policy_loss} | mean_value: {mean_value}")
-                print(f"Q1Loss: {q1_loss} | q2_loss: {q2_loss} | coeff loss: {ent_coef_loss}")
-                print(f"Q: {current_q_values.mean()} | target_Q: {target_q_values.mean()}")
+                print(f"Step: {n} | Policy Loss: {policy_loss} | mean_value: {mean_value}")
                 if self.writer is not None:
                     self.writer.add_scalar(f'{self.env.unwrapped.spec.id} SAC Mean Reward', mean_value, n)
 
