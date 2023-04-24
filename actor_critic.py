@@ -436,7 +436,7 @@ class PPOAgent():
             self.memory.compute_returns_and_advantage(terminal_value, self.last_episode_starts)
                 
             # since batch size is not specified, this loop only happens once
-            for old_observations, old_actions, old_values, old_log_probs, advantages, returns in self.memory.get(self.batch_size):
+            for old_observations, old_actions, old_values, old_log_probs, advantages, rewards, returns in self.memory.get(self.batch_size):
                 # prep data
                 old_actions = torch.Tensor(old_actions).to(self.device).reshape(-1, self.env.action_space.shape[0])
                 advantages = (advantages - advantages.mean() / (advantages.std() + 1e-8))
